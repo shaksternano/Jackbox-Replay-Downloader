@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Scanner;
 import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -57,7 +56,7 @@ public class Main {
     }
 
     private static CompletableFuture<List<File>> downloadGifs(JsonArray localStorage) {
-        var urls = localStorage.asList()
+        var futures = localStorage.asList()
             .stream()
             .filter(JsonElement::isJsonObject)
             .map(JsonElement::getAsJsonObject)
@@ -65,8 +64,7 @@ public class Main {
                 .flatMap(Main::tryGetAsString)
                 .stream()
             )
-            .collect(Collectors.toSet());
-        var futures = urls.stream()
+            .distinct()
             .map(Main::downloadGifs)
             .toList();
         return allOf(futures)
