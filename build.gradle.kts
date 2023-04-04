@@ -1,8 +1,9 @@
-import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
-
 plugins {
-    id("java")
-    id("com.github.johnrengelman.shadow") version "7.1.2"
+    val kotlinVersion = "1.8.20"
+    kotlin("jvm") version kotlinVersion
+    kotlin("plugin.serialization") version kotlinVersion
+
+    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 group = "io.github.shaksternano"
@@ -14,9 +15,15 @@ repositories {
 }
 
 dependencies {
-    implementation("com.google.code.gson:gson:2.10.1")
-    testImplementation("org.junit.jupiter:junit-jupiter-api:5.9.2")
-    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.9.2")
+    val ktorVersion = "2.2.4"
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("io.ktor:ktor-client-cio:$ktorVersion")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.0")
+
+    implementation("org.slf4j:slf4j-nop:2.0.7")
+
+    testImplementation(kotlin("test"))
 }
 
 tasks {
@@ -24,11 +31,15 @@ tasks {
         enabled = false
     }
 
-    named<ShadowJar>("shadowJar") {
+    shadowJar {
         archiveClassifier.set("")
         mergeServiceFiles()
         manifest {
-            attributes(mapOf("Main-Class" to "${project.group}.jackboxreplaydownloader.Main"))
+            attributes(
+                mapOf(
+                    "Main-Class" to "${project.group}.jackboxreplaydownloader.MainKt",
+                )
+            )
         }
     }
 
@@ -36,7 +47,11 @@ tasks {
         dependsOn(shadowJar)
     }
 
-    withType<Test> {
+    test {
         useJUnitPlatform()
     }
+}
+
+kotlin {
+    jvmToolchain(17)
 }
