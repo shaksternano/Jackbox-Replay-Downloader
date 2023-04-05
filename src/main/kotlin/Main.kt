@@ -4,7 +4,10 @@ import io.ktor.client.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -126,9 +129,8 @@ suspend fun downloadGif(gameName: String, sessionId: String, gameObjectId: Strin
     val gifUrl = retrieveGifUrl(gameName, sessionId, gameObjectId) ?: return null
     val gameObjectIdDashes = gameObjectId.replace("_", "-")
     val path = directory.resolve("$gameName-$sessionId-$gameObjectIdDashes.gif")
-    withContext(Dispatchers.IO) {
-        URL(gifUrl).openStream()
-    }.use { input ->
+    @Suppress("BlockingMethodInNonBlockingContext")
+    URL(gifUrl).openStream().use { input ->
         path.outputStream().use {
             input.copyTo(it)
         }
