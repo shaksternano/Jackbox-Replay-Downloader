@@ -4,6 +4,7 @@ import io.ktor.client.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.utils.io.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
@@ -11,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import java.net.URL
 import java.nio.file.Path
 import kotlin.io.path.absolute
@@ -45,7 +47,7 @@ fun main() = runBlocking {
     println()
     if (paths.isEmpty()) println("No files downloaded")
     else {
-        println("Files downloaded:")
+        println("${paths.size} files downloaded:")
         paths
             .map(Path::absolute)
             .forEach(::println)
@@ -55,11 +57,17 @@ fun main() = runBlocking {
 suspend fun downloadGifs(localStorage: JsonArray, scope: CoroutineScope): Deferred<List<Path>> = scope.async {
     localStorage
         .filterIsInstance<JsonObject>()
-        .mapNotNull { it["url"]?.toString() }
+        .mapNotNull { getStringValue(it, "url") }
         .distinct()
         .mapNotNull { downloadGifs(it, this) }
         .let { allOf(it, this).await() }
         .flatten()
+}
+
+fun getStringValue(json: JsonObject, key: String): String? {
+    val value = json[key]
+    return if (value is JsonPrimitive) value.content
+    else value?.toString()
 }
 
 suspend fun downloadGifs(artifactUrl: String, scope: CoroutineScope): Deferred<List<Path>>? {
@@ -89,9 +97,15 @@ fun parseArtifactUrl(artifactUrl: String): Pair<String, String>? {
 
 suspend fun retrieveGameObjectIds(gameName: String, sessionId: String): List<String> {
     val requestUrl = "https://fishery.jackboxgames.com/artifact/gallery/$gameName/$sessionId"
-    val response = HttpClient().get(requestUrl)
-    val body = Json.parseToJsonElement(response.bodyAsText()) as? JsonObject
-    return body?.let { getGameObjectIds(it, gameName) } ?: emptyList()
+    return try {
+        val response = HttpClient().get(requestUrl)
+        val body = Json.parseToJsonElement(response.bodyAsText()) as? JsonObject
+        body?.let { getGameObjectIds(it, gameName) } ?: emptyList()
+    } catch (e: Exception) {
+        println("An error occurred while retrieving data from $requestUrl")
+        e.printStack()
+        emptyList()
+    }
 }
 
 fun getGameObjectIds(responseBody: JsonObject, gameName: String): List<String> {
@@ -114,8 +128,8 @@ fun getGameObjectIds(gameData: JsonArray, gameName: String): List<String> {
         .flatMap { getGameObjectIds(it) }
 }
 
-fun getGameObjectIds(component: JsonObject): List<String> = when (component["type"]?.toString() ?: "") {
-    "shareable" -> listOfNotNull(component["gameObjectId"]).map(Any::toString)
+fun getGameObjectIds(component: JsonObject): List<String> = when (getStringValue(component, "type")) {
+    "shareable" -> listOfNotNull(getStringValue(component, "gameObjectId"))
     "container" -> listOfNotNull(component["children"])
         .filterIsInstance<JsonArray>()
         .flatten()
@@ -129,13 +143,19 @@ suspend fun downloadGif(gameName: String, sessionId: String, gameObjectId: Strin
     val gifUrl = retrieveGifUrl(gameName, sessionId, gameObjectId) ?: return null
     val gameObjectIdDashes = gameObjectId.replace("_", "-")
     val path = directory.resolve("$gameName-$sessionId-$gameObjectIdDashes.gif")
-    @Suppress("BlockingMethodInNonBlockingContext")
-    URL(gifUrl).openStream().use { input ->
-        path.outputStream().use {
-            input.copyTo(it)
+    return try {
+        @Suppress("BlockingMethodInNonBlockingContext")
+        URL(gifUrl).openStream().use { input ->
+            path.outputStream().use {
+                input.copyTo(it)
+            }
         }
+        path
+    } catch (e: Exception) {
+        println("An error occurred while retrieving data from $gifUrl")
+        e.printStack()
+        null
     }
-    return path
 }
 
 suspend fun retrieveGifUrl(gameName: String, sessionId: String, gameObjectId: String): String? =
@@ -146,6 +166,9 @@ suspend fun retrieveGifUrl(gameName: String, sessionId: String, gameObjectId: St
 suspend fun requestGif(gameName: String, sessionId: String, gameObjectId: String): Boolean {
     val requestUrl = "https://fishery.jackboxgames.com/artifact/gif/$gameName/$sessionId/$gameObjectId"
     val client = HttpClient {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 60000
+        }
         install(HttpRequestRetry) {
             maxRetries = 5
             retryIf { _, response ->
@@ -156,8 +179,14 @@ suspend fun requestGif(gameName: String, sessionId: String, gameObjectId: String
             }
         }
     }
-    val response = client.get(requestUrl)
-    return isOk(response)
+    return try {
+        val response = client.get(requestUrl)
+        isOk(response)
+    } catch (e: Exception) {
+        println("An error occurred while requesting $requestUrl")
+        e.printStack()
+        false
+    }
 }
 
 fun isOk(response: HttpResponse): Boolean =
