@@ -96,7 +96,9 @@ fun parseArtifactUrl(artifactUrl: String): Pair<String, String>? {
 }
 
 suspend fun retrieveGameObjectIds(gameName: String, sessionId: String): List<String> {
-    val requestUrl = "https://fishery.jackboxgames.com/artifact/gallery/$gameName/$sessionId"
+    val requestUrl =
+        if (gameName == "Quiplash2Game") "https://fishery.jackboxgames.com/artifact/$gameName/$sessionId"
+        else "https://fishery.jackboxgames.com/artifact/gallery/$gameName/$sessionId"
     return try {
         val response = HttpClient().get(requestUrl)
         val body = Json.parseToJsonElement(response.bodyAsText()) as? JsonObject
@@ -109,23 +111,29 @@ suspend fun retrieveGameObjectIds(gameName: String, sessionId: String): List<Str
 }
 
 fun getGameObjectIds(responseBody: JsonObject, gameName: String): List<String> {
-    val gameData = responseBody["gameData"] as? JsonArray
-    return gameData?.let { getGameObjectIds(it, gameName) } ?: emptyList()
-}
-
-fun getGameObjectIds(gameData: JsonArray, gameName: String): List<String> {
-    if (gameName == "quiplash3Game") {
-        val gameDataElement = gameData.firstOrNull() as? JsonObject
-        val blob = gameDataElement?.get("blob") as? JsonObject
-        val matchUps = blob?.get("matchups") as? JsonArray
+    if (gameName == "Quiplash2Game") {
+        val matchUps = responseBody["matchups"] as? JsonArray
         val roundCount = matchUps?.size
         if (roundCount != null) {
             return (0 until roundCount).map(Any::toString)
         }
     }
-    return gameData
-        .filterIsInstance<JsonObject>()
-        .flatMap { getGameObjectIds(it) }
+    val gameData = responseBody["gameData"]
+    if (gameData is JsonArray) {
+        if (gameName == "quiplash3Game") {
+            val gameDataElement = gameData.firstOrNull() as? JsonObject
+            val blob = gameDataElement?.get("blob") as? JsonObject
+            val matchUps = blob?.get("matchups") as? JsonArray
+            val roundCount = matchUps?.size
+            if (roundCount != null) {
+                return (0 until roundCount).map(Any::toString)
+            }
+        }
+        return gameData
+            .filterIsInstance<JsonObject>()
+            .flatMap { getGameObjectIds(it) }
+    }
+    return emptyList()
 }
 
 fun getGameObjectIds(component: JsonObject): List<String> = when (getStringValue(component, "type")) {
