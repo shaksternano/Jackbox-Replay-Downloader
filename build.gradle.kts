@@ -1,8 +1,7 @@
 plugins {
-    val kotlinVersion = "1.8.20"
+    val kotlinVersion = "1.9.0"
     kotlin("jvm") version kotlinVersion
     kotlin("plugin.serialization") version kotlinVersion
-
     id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
@@ -15,11 +14,11 @@ repositories {
 }
 
 dependencies {
-    val ktorVersion = "2.2.4"
+    val ktorVersion = "2.3.3"
     implementation("io.ktor:ktor-client-core:$ktorVersion")
     implementation("io.ktor:ktor-client-cio:$ktorVersion")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.1")
 
     implementation("org.slf4j:slf4j-nop:2.0.7")
 
