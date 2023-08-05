@@ -1,88 +1,100 @@
 package io.github.shaksternano.jackboxreplaydownloader
 
 import io.ktor.client.*
+import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.utils.io.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
+import io.ktor.utils.io.core.*
 import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import java.net.URL
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import kotlin.io.path.absolute
 import kotlin.io.path.createDirectories
-import kotlin.io.path.outputStream
+import kotlin.io.path.writeBytes
+import kotlin.io.use
 
-fun main() = runBlocking {
+suspend fun main() = coroutineScope {
     println("Input from URL (1) or from local storage JSON (2)? Default: 1")
     val choice = readln().trim()
     println()
-    val result: Deferred<List<Path>>
-    if (choice == "2") {
+    val paths = if (choice == "2") {
         println("Input local storage JSON:")
         val localStorage = readln().trim()
         println()
-        val parsed: JsonArray
-        try {
-            parsed = Json.parseToJsonElement(localStorage) as JsonArray
+        val parsed = try {
+            Json.parseToJsonElement(localStorage) as JsonArray
         } catch (e: Exception) {
             println("Invalid local storage JSON")
-            return@runBlocking
+            return@coroutineScope
         }
-        result = downloadGifs(parsed, this)
+        println("Downloading...")
+        downloadGifs(parsed)
     } else {
         println("Input URL:")
         val url = readln().trim()
         println()
-        result = downloadGifs(url, this) ?: return@runBlocking println("Invalid URL: $url")
+        println("Downloading...")
+        downloadGifs(url) ?: return@coroutineScope println("Invalid URL: $url")
     }
-    println("Downloading...")
-    val paths = result.await()
     println()
-    if (paths.isEmpty()) println("No files downloaded")
-    else {
+    if (paths.isEmpty()) {
+        println("No files downloaded")
+    } else {
         println("${paths.size} files downloaded:")
-        paths
-            .map(Path::absolute)
-            .forEach(::println)
+        paths.map(Path::absolute).forEach(::println)
     }
 }
 
-suspend fun downloadGifs(localStorage: JsonArray, scope: CoroutineScope): Deferred<List<Path>> = scope.async {
-    localStorage
+suspend fun downloadGifs(localStorage: JsonArray): List<Path> {
+    return localStorage
         .filterIsInstance<JsonObject>()
         .mapNotNull { getStringValue(it, "url") }
         .distinct()
-        .mapNotNull { downloadGifs(it, this) }
-        .let { allOf(it, this).await() }
+        .parallelMap { downloadGifs(it) }
+        .filterNotNull()
         .flatten()
 }
 
 fun getStringValue(json: JsonObject, key: String): String? {
     val value = json[key]
-    return if (value is JsonPrimitive) value.content
-    else value?.toString()
+    return if (value is JsonPrimitive) {
+        value.content
+    } else {
+        value?.toString()
+    }
 }
 
-suspend fun downloadGifs(artifactUrl: String, scope: CoroutineScope): Deferred<List<Path>>? {
+suspend fun <T, R> Iterable<T>.parallelMap(transform: suspend (T) -> R): List<R> = coroutineScope {
+    map { async { transform(it) } }.awaitAll()
+}
+
+suspend fun downloadGifs(artifactUrl: String): List<Path>? {
     val (gameName, sessionId) = parseArtifactUrl(artifactUrl) ?: return null
-    val directory = Path.of("output")
-    directory.createDirectories()
-    return scope.async {
-        val gameObjectIds = retrieveGameObjectIds(gameName, sessionId)
-        val deferredGifs = gameObjectIds
-            .map {
-                async {
-                    downloadGif(gameName, sessionId, it, directory)
-                }
+    val directory = Path.of("output").createDirectories()
+    return HttpClient(CIO) {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 60000
+        }
+        install(HttpRequestRetry) {
+            maxRetries = 5
+            retryIf { _, response ->
+                !isOk(response)
             }
-        allOf(deferredGifs, this).await()
+            delayMillis {
+                it * 5000L
+            }
+        }
+    }.use { client ->
+        retrieveGameObjectIds(gameName, sessionId, client)
+            .parallelMap { downloadGif(gameName, sessionId, it, directory, client) }
             .filterNotNull()
     }
 }
@@ -95,12 +107,14 @@ fun parseArtifactUrl(artifactUrl: String): Pair<String, String>? {
     return gameName to sessionId
 }
 
-suspend fun retrieveGameObjectIds(gameName: String, sessionId: String): List<String> {
-    val requestUrl =
-        if (gameName == "Quiplash2Game") "https://fishery.jackboxgames.com/artifact/$gameName/$sessionId"
-        else "https://fishery.jackboxgames.com/artifact/gallery/$gameName/$sessionId"
+suspend fun retrieveGameObjectIds(gameName: String, sessionId: String, client: HttpClient): List<String> {
+    val requestUrl = if (gameName == "Quiplash2Game") {
+        "https://fishery.jackboxgames.com/artifact/$gameName/$sessionId"
+    } else {
+        "https://fishery.jackboxgames.com/artifact/gallery/$gameName/$sessionId"
+    }
     return try {
-        val response = HttpClient().get(requestUrl)
+        val response = client.get(requestUrl)
         val body = Json.parseToJsonElement(response.bodyAsText()) as? JsonObject
         body?.let { getGameObjectIds(it, gameName) } ?: emptyList()
     } catch (e: Exception) {
@@ -115,7 +129,7 @@ fun getGameObjectIds(responseBody: JsonObject, gameName: String): List<String> {
         val matchUps = responseBody["matchups"] as? JsonArray
         val roundCount = matchUps?.size
         if (roundCount != null) {
-            return (0 until roundCount).map(Any::toString)
+            return (0..<roundCount).map(Any::toString)
         }
     }
     val gameData = responseBody["gameData"]
@@ -126,7 +140,7 @@ fun getGameObjectIds(responseBody: JsonObject, gameName: String): List<String> {
             val matchUps = blob?.get("matchups") as? JsonArray
             val roundCount = matchUps?.size
             if (roundCount != null) {
-                return (0 until roundCount).map(Any::toString)
+                return (0..<roundCount).map(Any::toString)
             }
         }
         return gameData
@@ -147,17 +161,18 @@ fun getGameObjectIds(component: JsonObject): List<String> = when (getStringValue
     else -> emptyList()
 }
 
-suspend fun downloadGif(gameName: String, sessionId: String, gameObjectId: String, directory: Path): Path? {
-    val gifUrl = retrieveGifUrl(gameName, sessionId, gameObjectId) ?: return null
+suspend fun downloadGif(
+    gameName: String,
+    sessionId: String,
+    gameObjectId: String,
+    directory: Path,
+    client: HttpClient
+): Path? {
+    val gifUrl = retrieveGifUrl(gameName, sessionId, gameObjectId, client) ?: return null
     val gameObjectIdDashes = gameObjectId.replace("_", "-")
     val path = directory.resolve("$gameName-$sessionId-$gameObjectIdDashes.gif")
     return try {
-        @Suppress("BlockingMethodInNonBlockingContext")
-        URL(gifUrl).openStream().use { input ->
-            path.outputStream().use {
-                input.copyTo(it)
-            }
-        }
+        download(gifUrl, path, client)
         path
     } catch (e: Exception) {
         println("An error occurred while retrieving data from $gifUrl")
@@ -166,27 +181,13 @@ suspend fun downloadGif(gameName: String, sessionId: String, gameObjectId: Strin
     }
 }
 
-suspend fun retrieveGifUrl(gameName: String, sessionId: String, gameObjectId: String): String? =
-    if (requestGif(gameName, sessionId, gameObjectId))
+suspend fun retrieveGifUrl(gameName: String, sessionId: String, gameObjectId: String, client: HttpClient): String? =
+    if (requestGif(gameName, sessionId, gameObjectId, client))
         gifUrl(gameName, sessionId, gameObjectId)
     else null
 
-suspend fun requestGif(gameName: String, sessionId: String, gameObjectId: String): Boolean {
+suspend fun requestGif(gameName: String, sessionId: String, gameObjectId: String, client: HttpClient): Boolean {
     val requestUrl = "https://fishery.jackboxgames.com/artifact/gif/$gameName/$sessionId/$gameObjectId"
-    val client = HttpClient {
-        install(HttpTimeout) {
-            requestTimeoutMillis = 60000
-        }
-        install(HttpRequestRetry) {
-            maxRetries = 5
-            retryIf { _, response ->
-                !isOk(response)
-            }
-            delayMillis {
-                it * 5000L
-            }
-        }
-    }
     return try {
         val response = client.get(requestUrl)
         isOk(response)
@@ -203,6 +204,14 @@ fun isOk(response: HttpResponse): Boolean =
 fun gifUrl(gameName: String, sessionId: String, gameObjectId: String): String =
     "https://s3.amazonaws.com/jbg-blobcast-artifacts/$gameName/$sessionId/anim_$gameObjectId.gif"
 
-suspend fun <T> allOf(deferreds: Iterable<Deferred<T>>, scope: CoroutineScope): Deferred<List<T>> = scope.async {
-    deferreds.map { it.await() }
+suspend fun download(url: String, path: Path, client: HttpClient) {
+    val response = client.get(url)
+    val channel = response.bodyAsChannel()
+    while (!channel.isClosedForRead) {
+        val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
+        while (!packet.isEmpty) {
+            val bytes = packet.readBytes()
+            path.writeBytes(bytes, StandardOpenOption.APPEND, StandardOpenOption.CREATE)
+        }
+    }
 }
