@@ -21,7 +21,7 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.writeBytes
 import kotlin.io.use
 
-suspend fun main() = coroutineScope {
+suspend fun main() {
     println("Input from URL (1) or from local storage JSON (2)? Default: 1")
     val choice = readln().trim()
     println()
@@ -33,7 +33,7 @@ suspend fun main() = coroutineScope {
             Json.parseToJsonElement(localStorage) as JsonArray
         } catch (e: Exception) {
             println("Invalid local storage JSON")
-            return@coroutineScope
+            return
         }
         println("Downloading...")
         downloadGifs(parsed)
@@ -42,7 +42,7 @@ suspend fun main() = coroutineScope {
         val url = readln().trim()
         println()
         println("Downloading...")
-        downloadGifs(url) ?: return@coroutineScope println("Invalid URL: $url")
+        downloadGifs(url) ?: return println("Invalid URL: $url")
     }
     println()
     if (paths.isEmpty()) {
