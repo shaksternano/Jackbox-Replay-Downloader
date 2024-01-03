@@ -1,19 +1,17 @@
 package io.github.shaksternano.jackboxreplaydownloader
 
 import io.ktor.client.*
+import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
+import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.serialization.kotlinx.json.*
 import io.ktor.utils.io.*
 import io.ktor.utils.io.core.*
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.coroutines.*
+import kotlinx.serialization.json.*
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import kotlin.io.path.absolute
@@ -80,6 +78,9 @@ suspend fun downloadGifs(artifactUrl: String): List<Path>? {
     val (gameName, sessionId) = parseArtifactUrl(artifactUrl) ?: return null
     val directory = Path.of("output").createDirectories()
     return HttpClient(CIO) {
+        install(ContentNegotiation) {
+            json()
+        }
         install(HttpTimeout) {
             requestTimeoutMillis = 60000
         }
@@ -115,7 +116,7 @@ suspend fun retrieveGameObjectIds(gameName: String, sessionId: String, client: H
     }
     return try {
         val response = client.get(requestUrl)
-        val body = Json.parseToJsonElement(response.bodyAsText()) as? JsonObject
+        val body = response.body<JsonElement>() as? JsonObject
         body?.let { getGameObjectIds(it, gameName) } ?: emptyList()
     } catch (e: Exception) {
         println("An error occurred while retrieving data from $requestUrl")
@@ -211,7 +212,9 @@ suspend fun download(url: String, path: Path, client: HttpClient) {
         val packet = channel.readRemaining(DEFAULT_BUFFER_SIZE.toLong())
         while (!packet.isEmpty) {
             val bytes = packet.readBytes()
-            path.writeBytes(bytes, StandardOpenOption.APPEND, StandardOpenOption.CREATE)
+            withContext(Dispatchers.IO) {
+                path.writeBytes(bytes, StandardOpenOption.APPEND, StandardOpenOption.CREATE)
+            }
         }
     }
 }
